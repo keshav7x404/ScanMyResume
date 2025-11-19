@@ -1,6 +1,6 @@
 # 📄 ScanMyResume
 
-**Created by Aayush Anand**
+**Created by Keshav**
 
 ScanMyResume is a modern, AI-powered resume analyzer that gives candidates actionable feedback based on job descriptions. Upload your resume, get instant ATS-style scoring, and track your application performance — all in one place.
 
