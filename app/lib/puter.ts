@@ -1,456 +1,228 @@
+/**
+ * Local store — replaces Puter.js entirely.
+ *
+ * Auth   → localStorage (username-based, no password needed)
+ * KV     → localStorage  (prefix "smr_kv_")
+ * Files  → IndexedDB     (database "smr_files", object-store "blobs")
+ */
 import { create } from "zustand";
 
-declare global {
-    interface Window {
-        puter: {
-            auth: {
-                getUser: () => Promise<PuterUser>;
-                isSignedIn: () => Promise<boolean>;
-                signIn: () => Promise<void>;
-                signOut: () => Promise<void>;
-            };
-            fs: {
-                write: (
-                    path: string,
-                    data: string | File | Blob
-                ) => Promise<File | undefined>;
-                read: (path: string) => Promise<Blob>;
-                upload: (file: File[] | Blob[]) => Promise<FSItem>;
-                delete: (path: string) => Promise<void>;
-                readdir: (path: string) => Promise<FSItem[] | undefined>;
-            };
-            ai: {
-                chat: (
-                    prompt: string | ChatMessage[],
-                    imageURL?: string | PuterChatOptions,
-                    testMode?: boolean,
-                    options?: PuterChatOptions
-                ) => Promise<Object>;
-                img2txt: (
-                    image: string | File | Blob,
-                    testMode?: boolean
-                ) => Promise<string>;
-            };
-            kv: {
-                get: (key: string) => Promise<string | null>;
-                set: (key: string, value: string) => Promise<boolean>;
-                delete: (key: string) => Promise<boolean>;
-                list: (pattern: string, returnValues?: boolean) => Promise<string[]>;
-                flush: () => Promise<boolean>;
-            };
-        };
-    }
+// ─── IndexedDB helpers ──────────────────────────────────────────────────────
+
+const DB_NAME = "smr_files";
+const STORE_NAME = "blobs";
+
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 }
 
-interface PuterStore {
-    isLoading: boolean;
-    error: string | null;
-    puterReady: boolean;
+async function idbSet(key: string, value: Blob): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbGet(key: string): Promise<Blob | undefined> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).get(key);
+    req.onsuccess = () => resolve(req.result as Blob | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+const AUTH_KEY = "smr_user";
+
+function loadUser(): PuterUser | null {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveUser(user: PuterUser) {
+  localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+}
+
+function removeUser() {
+  localStorage.removeItem(AUTH_KEY);
+}
+
+// ─── KV helpers ───────────────────────────────────────────────────────────────
+
+const KV_PREFIX = "smr_kv_";
+
+function kvGet(key: string): string | null {
+  return localStorage.getItem(KV_PREFIX + key);
+}
+
+function kvSet(key: string, value: string) {
+  localStorage.setItem(KV_PREFIX + key, value);
+}
+
+function kvDelete(key: string) {
+  localStorage.removeItem(KV_PREFIX + key);
+}
+
+function kvList(pattern: string, returnValues = false): string[] | { key: string; value: string }[] {
+  const prefix = KV_PREFIX;
+  // Convert glob pattern (e.g. "resume:*") to regex
+  const regex = new RegExp(
+    "^" + prefix + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$"
+  );
+  const keys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && regex.test(k)) keys.push(k.slice(prefix.length));
+  }
+  if (!returnValues) return keys;
+  return keys.map((k) => ({ key: k, value: localStorage.getItem(KV_PREFIX + k) ?? "" }));
+}
+
+// ─── Zustand store ────────────────────────────────────────────────────────────
+
+interface LocalStore {
+  isLoading: boolean;
+  error: string | null;
+  puterReady: boolean;
+
+  auth: {
+    user: PuterUser | null;
+    isAuthenticated: boolean;
+    signIn: (username: string) => void;
+    signOut: () => void;
+    getUser: () => PuterUser | null;
+  };
+
+  fs: {
+    /** Save a file under `path` in IndexedDB; returns a fake FSItem */
+    write: (path: string, data: File | Blob) => Promise<{ path: string } | undefined>;
+    read: (path: string) => Promise<Blob | undefined>;
+    upload: (files: File[] | Blob[]) => Promise<{ path: string } | undefined>;
+    delete: (path: string) => Promise<void>;
+    readDir: (path: string) => Promise<undefined>;
+  };
+
+  kv: {
+    get: (key: string) => Promise<string | null>;
+    set: (key: string, value: string) => Promise<void>;
+    delete: (key: string) => Promise<void>;
+    list: (pattern: string, returnValues?: boolean) => Promise<any[]>;
+    flush: () => Promise<void>;
+  };
+
+  init: () => void;
+  clearError: () => void;
+}
+
+export const usePuterStore = create<LocalStore>((set, get) => {
+  const init = () => {
+    const user = loadUser();
+    set({
+      puterReady: true,
+      isLoading: false,
+      auth: {
+        ...get().auth,
+        user,
+        isAuthenticated: !!user,
+      },
+    });
+  };
+
+  const signIn = (username: string) => {
+    const user: PuterUser = { username };
+    saveUser(user);
+    set({
+      auth: {
+        ...get().auth,
+        user,
+        isAuthenticated: true,
+      },
+    });
+  };
+
+  const signOut = () => {
+    removeUser();
+    set({
+      auth: {
+        ...get().auth,
+        user: null,
+        isAuthenticated: false,
+      },
+    });
+  };
+
+  return {
+    isLoading: false,
+    error: null,
+    puterReady: false,
+
     auth: {
-        user: PuterUser | null;
-        isAuthenticated: boolean;
-        signIn: () => Promise<void>;
-        signOut: () => Promise<void>;
-        refreshUser: () => Promise<void>;
-        checkAuthStatus: () => Promise<boolean>;
-        getUser: () => PuterUser | null;
-    };
+      user: null,
+      isAuthenticated: false,
+      signIn,
+      signOut,
+      getUser: () => get().auth.user,
+    },
+
     fs: {
-        write: (
-            path: string,
-            data: string | File | Blob
-        ) => Promise<File | undefined>;
-        read: (path: string) => Promise<Blob | undefined>;
-        upload: (file: File[] | Blob[]) => Promise<FSItem | undefined>;
-        delete: (path: string) => Promise<void>;
-        readDir: (path: string) => Promise<FSItem[] | undefined>;
-    };
-    ai: {
-        chat: (
-            prompt: string | ChatMessage[],
-            imageURL?: string | PuterChatOptions,
-            testMode?: boolean,
-            options?: PuterChatOptions
-        ) => Promise<AIResponse | undefined>;
-        feedback: (
-            path: string,
-            message: string
-        ) => Promise<AIResponse | undefined>;
-        img2txt: (
-            image: string | File | Blob,
-            testMode?: boolean
-        ) => Promise<string | undefined>;
-    };
-    kv: {
-        get: (key: string) => Promise<string | null | undefined>;
-        set: (key: string, value: string) => Promise<boolean | undefined>;
-        delete: (key: string) => Promise<boolean | undefined>;
-        list: (
-            pattern: string,
-            returnValues?: boolean
-        ) => Promise<string[] | KVItem[] | undefined>;
-        flush: () => Promise<boolean | undefined>;
-    };
-
-    init: () => void;
-    clearError: () => void;
-}
-
-const getPuter = (): typeof window.puter | null =>
-    typeof window !== "undefined" && window.puter ? window.puter : null;
-
-export const usePuterStore = create<PuterStore>((set, get) => {
-    const setError = (msg: string) => {
-        set({
-            error: msg,
-            isLoading: false,
-            auth: {
-                user: null,
-                isAuthenticated: false,
-                signIn: get().auth.signIn,
-                signOut: get().auth.signOut,
-                refreshUser: get().auth.refreshUser,
-                checkAuthStatus: get().auth.checkAuthStatus,
-                getUser: get().auth.getUser,
-            },
+      write: async (path, data) => {
+        const blob = data instanceof Blob ? data : new Blob([data]);
+        await idbSet(path, blob);
+        return { path };
+      },
+      read: async (path) => idbGet(path),
+      upload: async (files) => {
+        if (!files.length) return undefined;
+        const f = files[0];
+        const blob = f instanceof Blob ? f : new Blob([f]);
+        const path = `uploads/${Date.now()}_${(f as File).name ?? "file"}`;
+        await idbSet(path, blob);
+        return { path };
+      },
+      delete: async (path) => {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, "readwrite");
+          tx.objectStore(STORE_NAME).delete(path);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
         });
-    };
+      },
+      readDir: async () => undefined,
+    },
 
-    const checkAuthStatus = async (): Promise<boolean> => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return false;
+    kv: {
+      get: async (key) => kvGet(key),
+      set: async (key, value) => kvSet(key, value),
+      delete: async (key) => kvDelete(key),
+      list: async (pattern, returnValues) => kvList(pattern, returnValues) as any[],
+      flush: async () => {
+        const prefix = KV_PREFIX;
+        const toDelete: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k?.startsWith(prefix)) toDelete.push(k);
         }
+        toDelete.forEach((k) => localStorage.removeItem(k));
+      },
+    },
 
-        set({ isLoading: true, error: null });
-
-        try {
-            const isSignedIn = await puter.auth.isSignedIn();
-            if (isSignedIn) {
-                const user = await puter.auth.getUser();
-                set({
-                    auth: {
-                        user,
-                        isAuthenticated: true,
-                        signIn: get().auth.signIn,
-                        signOut: get().auth.signOut,
-                        refreshUser: get().auth.refreshUser,
-                        checkAuthStatus: get().auth.checkAuthStatus,
-                        getUser: () => user,
-                    },
-                    isLoading: false,
-                });
-                return true;
-            } else {
-                set({
-                    auth: {
-                        user: null,
-                        isAuthenticated: false,
-                        signIn: get().auth.signIn,
-                        signOut: get().auth.signOut,
-                        refreshUser: get().auth.refreshUser,
-                        checkAuthStatus: get().auth.checkAuthStatus,
-                        getUser: () => null,
-                    },
-                    isLoading: false,
-                });
-                return false;
-            }
-        } catch (err) {
-            const msg =
-                err instanceof Error ? err.message : "Failed to check auth status";
-            setError(msg);
-            return false;
-        }
-    };
-
-    const signIn = async (): Promise<void> => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-
-        set({ isLoading: true, error: null });
-
-        try {
-            await puter.auth.signIn();
-            await checkAuthStatus();
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : "Sign in failed";
-            setError(msg);
-        }
-    };
-
-    const signOut = async (): Promise<void> => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-
-        set({ isLoading: true, error: null });
-
-        try {
-            await puter.auth.signOut();
-            set({
-                auth: {
-                    user: null,
-                    isAuthenticated: false,
-                    signIn: get().auth.signIn,
-                    signOut: get().auth.signOut,
-                    refreshUser: get().auth.refreshUser,
-                    checkAuthStatus: get().auth.checkAuthStatus,
-                    getUser: () => null,
-                },
-                isLoading: false,
-            });
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : "Sign out failed";
-            setError(msg);
-        }
-    };
-
-    const refreshUser = async (): Promise<void> => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-
-        set({ isLoading: true, error: null });
-
-        try {
-            const user = await puter.auth.getUser();
-            set({
-                auth: {
-                    user,
-                    isAuthenticated: true,
-                    signIn: get().auth.signIn,
-                    signOut: get().auth.signOut,
-                    refreshUser: get().auth.refreshUser,
-                    checkAuthStatus: get().auth.checkAuthStatus,
-                    getUser: () => user,
-                },
-                isLoading: false,
-            });
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : "Failed to refresh user";
-            setError(msg);
-        }
-    };
-
-    const init = (): void => {
-        const puter = getPuter();
-        if (puter) {
-            set({ puterReady: true });
-            checkAuthStatus();
-            return;
-        }
-
-        const interval = setInterval(() => {
-            if (getPuter()) {
-                clearInterval(interval);
-                set({ puterReady: true });
-                checkAuthStatus();
-            }
-        }, 100);
-
-        setTimeout(() => {
-            clearInterval(interval);
-            if (!getPuter()) {
-                setError("Puter.js failed to load within 10 seconds");
-            }
-        }, 10000);
-    };
-
-    const write = async (path: string, data: string | File | Blob) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.fs.write(path, data);
-    };
-
-    const readDir = async (path: string) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.fs.readdir(path);
-    };
-
-    const readFile = async (path: string) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.fs.read(path);
-    };
-
-    const upload = async (files: File[] | Blob[]) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.fs.upload(files);
-    };
-
-    const deleteFile = async (path: string) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.fs.delete(path);
-    };
-
-    const chat = async (
-        prompt: string | ChatMessage[],
-        imageURL?: string | PuterChatOptions,
-        testMode?: boolean,
-        options?: PuterChatOptions
-    ) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        // return puter.ai.chat(prompt, imageURL, testMode, options);
-        return puter.ai.chat(prompt, imageURL, testMode, options) as Promise<
-            AIResponse | undefined
-        >;
-    };
-
-    const feedback = async (path: string, message: string) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-
-        return puter.ai.chat(
-            [
-                {
-                    role: "user",
-                    content: [
-                        {
-                            type: "file",
-                            puter_path: path,
-                        },
-                        {
-                            type: "text",
-                            text: message,
-                        },
-                    ],
-                },
-            ],
-            { model: "claude-3-7-sonnet" }
-        ) as Promise<AIResponse | undefined>;
-    };
-
-    const img2txt = async (image: string | File | Blob, testMode?: boolean) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.ai.img2txt(image, testMode);
-    };
-
-    const getKV = async (key: string) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.kv.get(key);
-    };
-
-    const setKV = async (key: string, value: string) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.kv.set(key, value);
-    };
-
-    const deleteKV = async (key: string) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.kv.delete(key);
-    };
-
-    const listKV = async (pattern: string, returnValues?: boolean) => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        if (returnValues === undefined) {
-            returnValues = false;
-        }
-        return puter.kv.list(pattern, returnValues);
-    };
-
-    const flushKV = async () => {
-        const puter = getPuter();
-        if (!puter) {
-            setError("Puter.js not available");
-            return;
-        }
-        return puter.kv.flush();
-    };
-
-    return {
-        isLoading: true,
-        error: null,
-        puterReady: false,
-        auth: {
-            user: null,
-            isAuthenticated: false,
-            signIn,
-            signOut,
-            refreshUser,
-            checkAuthStatus,
-            getUser: () => get().auth.user,
-        },
-        fs: {
-            write: (path: string, data: string | File | Blob) => write(path, data),
-            read: (path: string) => readFile(path),
-            readDir: (path: string) => readDir(path),
-            upload: (files: File[] | Blob[]) => upload(files),
-            delete: (path: string) => deleteFile(path),
-        },
-        ai: {
-            chat: (
-                prompt: string | ChatMessage[],
-                imageURL?: string | PuterChatOptions,
-                testMode?: boolean,
-                options?: PuterChatOptions
-            ) => chat(prompt, imageURL, testMode, options),
-            feedback: (path: string, message: string) => feedback(path, message),
-            img2txt: (image: string | File | Blob, testMode?: boolean) =>
-                img2txt(image, testMode),
-        },
-        kv: {
-            get: (key: string) => getKV(key),
-            set: (key: string, value: string) => setKV(key, value),
-            delete: (key: string) => deleteKV(key),
-            list: (pattern: string, returnValues?: boolean) =>
-                listKV(pattern, returnValues),
-            flush: () => flushKV(),
-        },
-        init,
-        clearError: () => set({ error: null }),
-    };
+    init,
+    clearError: () => set({ error: null }),
+  };
 });

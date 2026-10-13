@@ -17,6 +17,9 @@ RUN npm run build
 FROM node:20-alpine
 COPY ./package.json package-lock.json /app/
 COPY --from=production-dependencies-env /app/node_modules /app/node_modules
-COPY --from=build-env /app/build /app/build
+# Vite builds to dist/ (not build/) and has no "start" script —
+# serve the production bundle with `vite preview`.
+COPY --from=build-env /app/dist /app/dist
 WORKDIR /app
-CMD ["npm", "run", "start"]
+EXPOSE 4173
+CMD ["npm", "run", "preview", "--", "--host", "--port", "4173"]

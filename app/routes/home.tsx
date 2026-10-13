@@ -1,17 +1,9 @@
-import type { Route } from "./+types/home";
 import Navbar from "~/components/Navbar";
 import ResumeCard from "~/components/ResumeCard";
 import {usePuterStore} from "~/lib/puter";
-import {Link, useNavigate} from "react-router";
+import { Link, useNavigate } from "react-router-dom";
 import {useEffect, useState} from "react";
 import { TypewriterEffect } from "~/components/Typewritter";
-
-export function meta({}: Route.MetaArgs) {
-  return [
-    { title: "ScanMyResume" },
-    { name: "description", content: "Smart feedback for your dream job!" },
-  ];
-}
 
 export default function Home() {
   const { auth, kv } = usePuterStore();
@@ -29,9 +21,12 @@ export default function Home() {
 
       const resumes = (await kv.list('resume:*', true)) as KVItem[];
 
-      const parsedResumes = resumes?.map((resume) => (
-          JSON.parse(resume.value) as Resume
-      ))
+      const parsedResumes = resumes
+        ?.map((resume) => (
+            JSON.parse(resume.value) as Resume
+        ))
+        // Skip records whose analysis hasn't finished (feedback not yet an object).
+        .filter((resume) => resume && typeof resume.feedback === 'object');
 
       setResumes(parsedResumes || []);
       setLoadingResumes(false);

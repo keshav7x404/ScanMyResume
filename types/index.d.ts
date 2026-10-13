@@ -1,3 +1,12 @@
+interface PuterUser {
+    username: string;
+}
+
+interface KVItem {
+    key: string;
+    value: string;
+}
+
 interface Resume {
     id: string;
     companyName?: string;

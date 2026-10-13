@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link } from "react-router-dom";
 import ScoreCircle from "~/components/ScoreCircle";
 import { useEffect, useState } from "react";
 import { usePuterStore } from "~/lib/puter";
@@ -9,15 +9,19 @@ const ResumeCard = ({ resume: { id, companyName, jobTitle, feedback, imagePath }
   const [resumeUrl, setResumeUrl] = useState('');
 
   useEffect(() => {
+    let url: string | null = null;
     const loadResume = async () => {
       const blob = await fs.read(imagePath);
       if (!blob) return;
-      let url = URL.createObjectURL(blob);
+      url = URL.createObjectURL(blob);
       setResumeUrl(url);
     };
 
     loadResume();
-  }, [imagePath]);
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [imagePath, fs]);
 
   return (
     <Link to={`/resume/${id}`} className="block">

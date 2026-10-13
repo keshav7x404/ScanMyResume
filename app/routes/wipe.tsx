@@ -1,58 +1,103 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate } from "react-router-dom";
 import { usePuterStore } from "~/lib/puter";
 
-const WipeApp = () => {
-    const { auth, isLoading, error, clearError, fs, ai, kv } = usePuterStore();
-    const navigate = useNavigate();
-    const [files, setFiles] = useState<FSItem[]>([]);
+interface StoredResume {
+    key: string;
+    id: string;
+    companyName?: string;
+    jobTitle?: string;
+    resumePath: string;
+    imagePath: string;
+}
 
-    const loadFiles = async () => {
-        const files = (await fs.readDir("./")) as FSItem[];
-        setFiles(files);
+const WipeApp = () => {
+    const { auth, isLoading, fs, kv } = usePuterStore();
+    const navigate = useNavigate();
+    const [resumes, setResumes] = useState<StoredResume[]>([]);
+
+    const loadResumes = async () => {
+        const items = (await kv.list("resume:*", true)) as { key: string; value: string }[];
+        const parsed: StoredResume[] = [];
+        for (const item of items ?? []) {
+            try {
+                const data = JSON.parse(item.value);
+                parsed.push({
+                    key: item.key,
+                    id: data.id ?? item.key,
+                    companyName: data.companyName,
+                    jobTitle: data.jobTitle,
+                    resumePath: data.resumePath,
+                    imagePath: data.imagePath,
+                });
+            } catch {
+                // Corrupt entry — still list it so it can be deleted.
+                parsed.push({
+                    key: item.key,
+                    id: item.key,
+                    resumePath: "",
+                    imagePath: "",
+                });
+            }
+        }
+        setResumes(parsed);
     };
 
     useEffect(() => {
-        loadFiles();
+        loadResumes();
     }, []);
 
     useEffect(() => {
         if (!isLoading && !auth.isAuthenticated) {
             navigate("/auth?next=/wipe");
         }
-    }, [isLoading]);
+    }, [isLoading, auth.isAuthenticated, navigate]);
 
-    const handleDelete = async () => {
-        files.forEach(async (file) => {
-            await fs.delete(file.path);
-        });
+    const deleteResume = async (resume: StoredResume) => {
+        if (resume.resumePath) await fs.delete(resume.resumePath).catch(() => {});
+        if (resume.imagePath) await fs.delete(resume.imagePath).catch(() => {});
+        await kv.delete(resume.key);
+        await loadResumes();
+    };
+
+    const handleDeleteAll = async () => {
+        for (const resume of resumes) {
+            if (resume.resumePath) await fs.delete(resume.resumePath).catch(() => {});
+            if (resume.imagePath) await fs.delete(resume.imagePath).catch(() => {});
+        }
         await kv.flush();
-        loadFiles();
+        await loadResumes();
     };
 
     if (isLoading) {
         return <div>Loading...</div>;
     }
 
-    if (error) {
-        return <div>Error {error}</div>;
-    }
-
     return (
         <div>
             Authenticated as: {auth.user?.username}
-            <div>Existing files:</div>
+            <div>Stored resumes ({resumes.length}):</div>
             <div className="flex flex-col gap-4">
-                {files.map((file) => (
-                    <div key={file.id} className="flex flex-row gap-4">
-                        <p>{file.name}</p>
+                {resumes.map((resume) => (
+                    <div key={resume.key} className="flex flex-row gap-4 items-center">
+                        <p>
+                            {resume.companyName || resume.jobTitle
+                                ? `${resume.companyName ?? ""} — ${resume.jobTitle ?? ""}`
+                                : resume.id}
+                        </p>
+                        <button
+                            className="bg-red-500 text-white px-4 py-2 rounded-md cursor-pointer"
+                            onClick={() => deleteResume(resume)}
+                        >
+                            Delete
+                        </button>
                     </div>
                 ))}
             </div>
             <div>
                 <button
                     className="bg-blue-500 text-white px-4 py-2 rounded-md cursor-pointer"
-                    onClick={() => handleDelete()}
+                    onClick={() => handleDeleteAll()}
                 >
                     Wipe App Data
                 </button>
