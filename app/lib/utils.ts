@@ -20,3 +20,11 @@ export function formatSize(bytes: number): string {
 
 export const generateUUID = () => crypto.randomUUID();
 
+/**
+ * URL for a file in public/ that respects the deploy base path.
+ * Hardcoded "/images/x" breaks under a subpath (e.g. GitHub Pages
+ * /ScanMyResume/); asset("images/x") works everywhere.
+ */
+export const asset = (p: string) =>
+  `${import.meta.env.BASE_URL}${p.replace(/^\//, "")}`;
+

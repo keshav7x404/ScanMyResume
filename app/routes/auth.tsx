@@ -1,6 +1,7 @@
 import { usePuterStore } from "~/lib/puter";
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { asset } from "~/lib/utils";
 
 const Auth = () => {
     const { auth } = usePuterStore();
@@ -25,7 +26,7 @@ const Auth = () => {
     };
 
     return (
-        <main className="bg-[url('/images/bg-auth-new.jpg')] bg-cover min-h-screen flex items-center justify-center">
+        <main className="bg-cover min-h-screen flex items-center justify-center" style={{ backgroundImage: `url(${asset("images/bg-auth-new.jpg")})` }}>
             <div className="animate-[glow_3s_ease-in-out_infinite] gradient-border shadow-lg">
                 <section className="flex flex-col gap-8 rounded-2xl p-10 min-w-[340px] sm:min-w-[500px]"
                     style={{ background: 'linear-gradient(to bottom, #61045F, #AA076B)' }}>

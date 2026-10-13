@@ -5,7 +5,7 @@ import { usePuterStore } from "~/lib/puter";
 import { useNavigate } from "react-router-dom";
 import { convertPdfToImage, extractPdfText } from "~/lib/pdf2img";
 import { analyzeLocalAts } from "~/lib/atsLocal";
-import { generateUUID } from "~/lib/utils";
+import { generateUUID, asset } from "~/lib/utils";
 import { prepareInstructions } from "../../constants";
 import { analyzeResumeWithGemini } from "~/lib/gemini";
 
@@ -185,7 +185,7 @@ const Upload = () => {
     };
 
     return (
-        <main className="bg-[url('/images/bg-auth-new.jpg')] bg-cover">
+        <main className="bg-cover" style={{ backgroundImage: `url(${asset("images/bg-auth-new.jpg")})` }}>
             <Navbar />
             <section className="main-section">
                 <div className="page-heading py-16">
@@ -193,7 +193,7 @@ const Upload = () => {
                     {isProcessing ? (
                         <>
                             <h2>{statusText}</h2>
-                            <img src="/images/resume-scan.gif" className="w-full max-w-md" alt="scanning" />
+                            <img src={asset("images/resume-scan.gif")} className="w-full max-w-md" alt="scanning" />
                         </>
                     ) : (
                         <h2>Drop your resume for an ATS score and improvement tips</h2>

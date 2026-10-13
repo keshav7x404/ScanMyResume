@@ -4,6 +4,7 @@ import { usePuterStore } from "~/lib/puter";
 import Summary from "~/components/Summary";
 import ATS from "~/components/ATS";
 import Details from "~/components/Details";
+import { asset } from "~/lib/utils";
 
 const Resume = () => {
     const { auth, isLoading, fs, kv } = usePuterStore();
@@ -43,7 +44,7 @@ const Resume = () => {
         <main className="!pt-0">
             <nav className="resume-nav">
                 <Link to="/" className="back-button">
-                    <img src="/icons/back.svg" alt="back" className="w-2.5 h-2.5" />
+                    <img src={asset("icons/back.svg")} alt="back" className="w-2.5 h-2.5" />
                     <span className="text-sm text-white font-semibold">Back to Homepage</span>
                 </Link>
             </nav>
@@ -70,7 +71,7 @@ const Resume = () => {
                             <Details feedback={feedback} />
                         </div>
                     ) : (
-                        <img src="/images/resume-scan-2.gif" className="w-full" alt="loading" />
+                        <img src={asset("images/resume-scan-2.gif")} className="w-full" alt="loading" />
                     )}
                 </section>
             </div>
